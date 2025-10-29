@@ -1,0 +1,162 @@
+#### We want a python code that takes a run and makes an h5 file for the CITIUS detector
+import os 
+import sys
+import numpy as np
+# import matplotlib.pyplot as plt
+# import stpy
+import dbpy
+# import stpy
+import h5py
+# from mpi4py import MPI
+### Is the CITIUS package installed?
+import ctdapy_xfel
+import time
+def displayErrorMessage(rank):
+    singlePrint("citiusToH5 uses ctdapy_xfel to convert CITIUS data to h5 files \n")
+    singlePrint("Usage: mpiexec -n <nProcs> python citiusToH5.py -dir <writeableDirectory=.> -r runNumber -BL <beamline=3> ~ for a single run")
+    singlePrint("Usage: mpiexec -n <nProcs> python citiusToH5.py -dir <writeableDirectory=.> -rLow <runNumberLow> -rHigh <runNumberHigh> -BL <beamline=3> ~ for a series of runs\n")
+    singlePrint("Program will sort for runs with CITIUS")
+    
+
+def singlePrint(rank,message):
+    print(message)
+
+def getPulseEnegyInJ(beamLine,run,trainID):
+    ### Replace with proper function
+    return 1
+
+def main():
+
+    ### Default values
+
+    rank = 0
+    
+    runNumber = -1
+    lowRunNumber = -1
+    highRunNumber = -1
+    beamLine = 3
+    runNumbers = []
+    writeableDirectory = "."
+
+    
+    ### Read in user prompts
+    for i in range(np.shape(sys.argv)[0]):
+        if ( sys.argv[i] == "-h" ) or ( sys.argv[i] == "-help" ) or ( sys.argv[i] == "--help" ):
+            displayErrorMessage(rank)
+    for i in range(np.shape(sys.argv)[0]):
+        if sys.argv[i] == "-rLow":
+            lowRunNumber = int(sys.argv[i+1])
+    for i in range(np.shape(sys.argv)[0]):
+        if sys.argv[i] == "-rHigh":
+            highRunNumber = int(sys.argv[i+1])
+
+    for i in range(np.shape(sys.argv)[0]):
+        if sys.argv[i] == "-r":
+            runNumber = int(sys.argv[i+1])
+            
+    for i in range(np.shape(sys.argv)[0]):
+        if sys.argv[i] == "-BL":
+            beamLine = int(sys.argv[i+1])
+
+    for i in range(np.shape(sys.argv)[0]):
+            if sys.argv[i] == "-dir":
+                writeableDirectory = str(sys.argv[i+1])
+            
+        
+    if ((runNumber < 0 and lowRunNumber < 0 and highRunNumber < 0) or (runNumber < 0 and (lowRunNumber < 0 or highRunNumber < 0))):
+        singlePrint(rank,"Error: No run numbers given")
+        singlePrint(rank,"Run with --help for assistance")
+        sys.exit(1)
+
+    if (lowRunNumber > 0 and highRunNumber > 0):
+        for i in range(lowRunNumber,highRunNumber+1):
+            runNumbers.append(i)
+    
+    if (runNumber > 0):
+        if (runNumber in runNumbers):
+            pass
+        else:
+            runNumbers.append(runNumber)
+            
+    ### Filter by runs with CITIUS
+    runsToConsider = []
+    for run in runNumbers:
+        if (ctdapy_xfel.get_runstatus(beamLine,run) == 0):
+            runsToConsider.append(run)
+
+    runNumbers = runsToConsider
+        
+    
+    outString = "Runs to process:  " + str(runNumbers) + "\n"
+    singlePrint(rank,outString)
+
+    ### CONSTANTS
+    CITIUS_IMAGE_WIDTH  = 384
+    CITIUS_IMAGE_HEIGHT = 728
+    
+    
+    for run in runNumbers:
+        ### Get buffer
+
+        t0 = time.time()
+
+
+        buffer = ctdapy_xfel.CtrlBuffer(beamLine,run)
+        sensorID = buffer.read_detidlist()[0]
+        CITIUS_EMPTY_MASK = np.zeros((CITIUS_IMAGE_WIDTH,CITIUS_IMAGE_HEIGHT),dtype=np.uint8)
+        buffer.read_badpixel_mask(CITIUS_EMPTY_MASK,0)
+        mask   = CITIUS_EMPTY_MASK
+        tagList = buffer.read_taglist()
+        numberOfTrains = len(tagList)
+
+        singlePrint(rank, "Run number      : " + str(run))
+        singlePrint(rank, "Number of trains: " + str(numberOfTrains))
+
+
+        summedArray = np.zeros(np.shape(CITIUS_EMPTY_MASK))
+        summedArrayNoNorm = np.zeros(np.shape(CITIUS_EMPTY_MASK))
+        count,bins = np.histogram(CITIUS_EMPTY_MASK,bins=np.arange(-25,25,0.05),density=False)
+        allCounts = np.zeros(np.shape(count))
+        for train in tagList:
+            I0 = getPulseEnegyInJ(beamLine,run,train)
+            CITIUS_EMPTY_ARRAY  = np.zeros((CITIUS_IMAGE_WIDTH,CITIUS_IMAGE_HEIGHT),dtype=np.float32)
+            buffer.read_image(CITIUS_EMPTY_ARRAY,0,train)
+            citiusData = CITIUS_EMPTY_ARRAY
+
+            citiusData[np.where(mask == 1)] = np.nan
+
+            summedArray = summedArray + citiusData / I0
+            summedArrayNoNorm = summedArrayNoNorm + citiusData
+            count,bins = np.histogram(citiusData,bins=np.arange(-25,25,0.05),density=False)
+            allCounts = allCounts + count
+
+        summedArray = summedArray / float(numberOfTrains)
+
+        
+        saveFileName = str(writeableDirectory) + "/citius_BL"+ str(beamLine) + "_r" + str(run) + ".npy" 
+        np.save(saveFileName,summedArray)
+
+        saveFileName = str(writeableDirectory) + "/citiusNoNormilisation_BL"+ str(beamLine) + "_r" + str(run) + ".npy" 
+        np.save(saveFileName,summedArrayNoNorm)
+
+        binCenters = []
+        for i in range(np.shape(bins)[0]-1):
+            binCenters.append((bins[i]+bins[i+1]) * 0.5 )
+        
+        saveFileName = str(writeableDirectory) + "/citiusHistogram_BL"+ str(beamLine) + "_r" + str(run) + ".npy" 
+        np.save(saveFileName,np.column_stack((binCenters, allCounts)))
+            
+        t1 = time.time()
+
+        totalTime = t1-t0
+        outString = str(numberOfTrains) + " trains processed in " + str(round(totalTime,5)) + "s" 
+        singlePrint(rank,outString)
+                
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
+    #### Doesn't work due to large memory requirement.
+    
+    
