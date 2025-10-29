@@ -54,6 +54,8 @@ def main():
     runNumbers = []
     writeableDirectory = "."
 
+    upperThreshold = None
+    lowerThreshold = -10
     
     ### Read in user prompts
     for i in range(np.shape(sys.argv)[0]):
@@ -77,6 +79,14 @@ def main():
     for i in range(np.shape(sys.argv)[0]):
             if sys.argv[i] == "-dir":
                 writeableDirectory = str(sys.argv[i+1])
+
+    for i in range(np.shape(sys.argv)[0]):
+            if sys.argv[i] == "-upperThreshold":
+                upperThreshold = str(sys.argv[i+1])
+
+    for i in range(np.shape(sys.argv)[0]):
+            if sys.argv[i] == "-lowerThreshold":
+                lowerThreshold = str(sys.argv[i+1])
             
         
     if ((runNumber < 0 and lowRunNumber < 0 and highRunNumber < 0) or (runNumber < 0 and (lowRunNumber < 0 or highRunNumber < 0))):
@@ -147,6 +157,11 @@ def main():
             buffer.read_image(CITIUS_EMPTY_ARRAY,0,train)
             citiusData = CITIUS_EMPTY_ARRAY
 
+            ### Apply threshold 
+            if (upperThreshold != None):
+                citiusData[np.where(citiusData > upperThreshold)] = np.nan
+            citiusData[np.where(citiusData < lowerThreshold)] = 0.0
+            ### Mask hot pixels
             citiusData[np.where(mask == 1)] = np.nan
 
             localSummedArray = localSummedArray + citiusData / I0
