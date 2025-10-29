@@ -21,4 +21,4 @@ module load python/SACLA_python-3.7
 rm output.txt error.txt
 
 # Run your application
-time mpiexec -n ${NCPUS} python3 citiusToH5.py -rLow 255550 -rHigh 255587  -BL 2 -dir ./citiusData
+time mpiexec -n ${NCPUS} python3 citiusToNpy.py -rLow 255550 -rHigh 255587  -BL 2 -dir ./citiusData
