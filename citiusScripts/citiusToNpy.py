@@ -116,8 +116,8 @@ def main():
     singlePrint(rank,outString)
 
     ### CONSTANTS
-    CITIUS_IMAGE_WIDTH  = 384
-    CITIUS_IMAGE_HEIGHT = 728
+    CITIUS_IMAGE_WIDTH  = 728
+    CITIUS_IMAGE_HEIGHT = 384
     
     
     for run in runNumbers:
@@ -137,12 +137,12 @@ def main():
 
         summedArray = np.zeros(np.shape(CITIUS_EMPTY_MASK))
         summedArrayNoNorm = np.zeros(np.shape(CITIUS_EMPTY_MASK))
-        count,bins = np.histogram(CITIUS_EMPTY_MASK,bins=np.arange(-25,25,0.05),density=False)
+        count,bins = np.histogram(CITIUS_EMPTY_MASK,bins=np.arange(0,100,0.05),density=False)
         allCounts = np.zeros(np.shape(count))
 
         localSummedArray       = np.zeros(np.shape(CITIUS_EMPTY_MASK))
         localSummedArrayNoNorm = np.zeros(np.shape(CITIUS_EMPTY_MASK))
-        count,bins = np.histogram(CITIUS_EMPTY_MASK,bins=np.arange(-25,25,0.05),density=False)
+        count,bins = np.histogram(CITIUS_EMPTY_MASK,bins=np.arange(0,100,0.05),density=False)
         localAllCounts = np.zeros(np.shape(count))
 
         nTrainsLocal = 0
@@ -166,7 +166,7 @@ def main():
 
             localSummedArray = localSummedArray + citiusData / I0
             localSummedArrayNoNorm = localSummedArrayNoNorm + citiusData
-            count,bins = np.histogram(citiusData,bins=np.arange(-25,25,0.05),density=False)
+            count,bins = np.histogram(citiusData,bins=np.arange(0,100,0.05),density=False)
             localAllCounts = localAllCounts + count
             nTrainsLocal = nTrainsLocal + 1
 
