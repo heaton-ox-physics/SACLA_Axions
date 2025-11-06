@@ -30,6 +30,11 @@ class MPCCDProcessing():
 
     def read_det(self, run, calibrate):
         taglist = dbpy.read_taglist_byrun(self.bl, run)
+        high_tag = dbpy.read_hightagnumber(self.bl, run)
+        shutter = np.array(dbpy.read_syncdatalist_float('xfel_bl_3_shutter_1_open_valid/status', high_tag, taglist))
+        shutter_mask = shutter==1.0
+        shutter_mask = np.array(shutter, dtype=bool)
+        taglist = np.array(taglist)[shutter_mask]
         numIm = len(taglist)
         print('Run: {}\nNumber of images: {}\nDetector ID: {}'.format(run, numIm, self.detectorID))
         
@@ -60,6 +65,11 @@ class MPCCDProcessing():
 
     def read_det_sbt(self, run, imDark, calibrate=False):
         taglist = dbpy.read_taglist_byrun(self.bl, run)
+        high_tag = dbpy.read_hightagnumber(self.bl, run)
+        shutter = np.array(dbpy.read_syncdatalist_float('xfel_bl_3_shutter_1_open_valid/status', high_tag, taglist))
+        shutter_mask = shutter==1.0
+        shutter_mask = np.array(shutter, dtype=bool)
+        taglist = np.array(taglist)[shutter_mask]
         numIm = len(taglist)
         print('\nRun: {}\nNumber of images: {}\nDetector ID: {}'.format(run, numIm, self.detectorID))
         
@@ -89,7 +99,7 @@ class MPCCDProcessing():
             i += 1
         
         return im2Dall_sbt
-
+    
     def load_images(self, run = None, runDark = None, calibrate=False):
         #
         if runDark is not None:
@@ -105,8 +115,13 @@ class MPCCDProcessing():
 
     def create_run_histograms(self, x1, y1, x2, y2, run = None, runDark = None):
         imDark = np.mean(self.read_det(runDark, calibrate=False),0)
-        #
+        
         taglist = dbpy.read_taglist_byrun(self.bl, run)
+        high_tag = dbpy.read_hightagnumber(self.bl, run)
+        shutter = np.array(dbpy.read_syncdatalist_float('xfel_bl_3_shutter_1_open_valid/status', high_tag, taglist))
+        shutter_mask = shutter==1.0
+        shutter_mask = np.array(shutter, dtype=bool)
+        taglist = np.array(taglist)[shutter_mask]
         numIm = len(taglist)
         print('\nRun: {}\nNumber of images: {}\nDetector ID: {}'.format(run, numIm, self.detectorID))
         
