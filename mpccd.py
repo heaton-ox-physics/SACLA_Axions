@@ -63,6 +63,93 @@ class MPCCDProcessing():
         
         return im2Dall
 
+    def read_det_mpi(self, run, calibrate=False):
+        """Parallel detector reader using MPI. Each rank handles a subset of taglist."""
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+        size = comm.Get_size()
+        print('size', size)
+        # --- Rank 0 reads metadata ---
+        if rank == 0:
+            taglist = dbpy.read_taglist_byrun(self.bl, run)
+            high_tag = dbpy.read_hightagnumber(self.bl, run)
+            shutter = np.array(dbpy.read_syncdatalist_float(
+                'xfel_bl_3_shutter_1_open_valid/status', high_tag, taglist))
+            shutter_mask = np.array(shutter, dtype=bool)
+            taglist = np.array(taglist)[shutter_mask]
+            numIm = len(taglist)
+            print(f"Run: {run}\nNumber of images: {numIm}\nDetector ID: {self.detectorID}")
+        else:
+            taglist = None
+            numIm = None
+
+        # --- Broadcast taglist and counts ---
+        taglist = comm.bcast(taglist, root=0)
+        numIm = comm.bcast(numIm, root=0)
+
+        # --- Divide tags across ranks ---
+        chunks = np.array_split(taglist, size)
+        local_tags = chunks[rank]
+        print(f"Rank {rank}: {len(local_tags)} frames")
+
+        if len(local_tags) == 0:
+            return None  # In case size > numIm
+
+        # --- Initialize reader locally ---
+        obj = stpy.StorageReader(self.detectorID, self.bl, (run,))
+        buff = stpy.StorageBuffer(obj)
+
+        # --- Pre-allocate local buffer ---
+        obj.collect(buff, local_tags[0])
+        im2D = buff.read_det_data(0)
+        ny, nx = im2D.shape
+        local_data = np.zeros((len(local_tags), ny, nx), dtype=np.float32)
+
+        # --- Read images ---
+        for i, tag in enumerate(local_tags):
+            obj.collect(buff, tag)
+            frame = buff.read_det_data(0).astype(np.float32)
+
+            if calibrate:
+                frame = (frame - self.intercept) / self.slope
+            local_data[i] = frame
+
+            if i % 100 == 0:
+                sys.stdout.write(f"\rRank {rank}: {i}/{len(local_tags)}")
+                sys.stdout.flush()
+
+        sys.stdout.write(f"\nRank {rank}: finished reading {len(local_tags)} images.\n")
+
+       
+        # --- Prepare for Gatherv ---
+        n_local = np.array([local_data.shape[0]], dtype=np.int64)
+        all_counts = np.zeros(size, dtype=np.int64)
+        comm.Allgather(n_local, all_counts)
+        displs = np.insert(np.cumsum(all_counts[:-1]), 0, 0)
+    
+        # Allocate full buffer only on root
+        if rank == 0:
+            total_images = np.sum(all_counts)
+            full_data = np.empty((total_images, ny, nx), dtype=np.float32)
+        else:
+            full_data = None
+    
+        # --- Perform Gatherv (binary, no pickling) ---
+        comm.Gatherv(
+            sendbuf=local_data,
+            recvbuf=(
+                full_data,
+                (all_counts * ny * nx, displs * ny * nx)
+            ),
+            root=0
+        )
+
+        if rank == 0:
+            print(f"Full dataset gathered: {full_data.shape}")
+            return full_data
+        else:
+            return None
+
     def read_det_sbt(self, run, imDark, calibrate=False):
         taglist = dbpy.read_taglist_byrun(self.bl, run)
         high_tag = dbpy.read_hightagnumber(self.bl, run)
