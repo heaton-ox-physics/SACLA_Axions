@@ -18,6 +18,6 @@ Scripts for SACLA beamtime.
    
    ```bash
    from mpccd import MPCCDProcessing
-   MP=MPCCDProcessing('/home/sifei/', 'MPCCD-1B1-M03-006')
+   MP=MPCCDProcessing('/path/to/home/', 'MPCCD-1B1-M03-006')
    data = MP.read_det_mpi(1616893, False)
    ```
