@@ -8,6 +8,8 @@ import stpy
 import ippy
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
+import pandas as pd
+from scipy.optimize import curve_fit
 
 class MPCCDProcessing():
     def __init__(self, base_path, detectorID, bl=3):
