@@ -118,14 +118,17 @@ def main():
     ### CONSTANTS
     CITIUS_IMAGE_WIDTH  = 728
     CITIUS_IMAGE_HEIGHT = 384
-    
+
+    x1, y1, x2, y2 = 160, 340, 230, 400  # ROI coordinates 
     
     for run in runNumbers:
         ### Get buffer
         t0 = time.time()
         buffer = ctdapy_xfel.CtrlBuffer(beamLine,run)
         sensorID = buffer.read_detidlist()[0]
+        
         CITIUS_EMPTY_MASK = np.zeros((CITIUS_IMAGE_WIDTH,CITIUS_IMAGE_HEIGHT),dtype=np.uint8)
+        
         buffer.read_badpixel_mask(CITIUS_EMPTY_MASK,0)
         mask   = CITIUS_EMPTY_MASK
         tagList = buffer.read_taglist()
@@ -144,6 +147,10 @@ def main():
         localSummedArrayNoNorm = np.zeros(np.shape(CITIUS_EMPTY_MASK))
         count,bins = np.histogram(CITIUS_EMPTY_MASK,bins=np.arange(0,100,0.05),density=False)
         localAllCounts = np.zeros(np.shape(count))
+        
+        localSummedArray_roi   = np.zeros(np.shape(CITIUS_EMPTY_MASK[y1:y2, x1:x2]))
+        count_roi,bins_roi = np.histogram(CITIUS_EMPTY_MASK[y1:y2, x1:x2],bins=np.arange(0,100,0.05),density=False)
+        localAllCounts_roi = np.zeros(np.shape(count_roi))
 
         nTrainsLocal = 0
         
@@ -166,31 +173,57 @@ def main():
 
             localSummedArray = localSummedArray + citiusData / I0
             localSummedArrayNoNorm = localSummedArrayNoNorm + citiusData
+            
             count,bins = np.histogram(citiusData,bins=np.arange(0,100,0.05),density=False)
             localAllCounts = localAllCounts + count
+
+            # apply roi and create seperate histogram
+            citiusData_roi = citiusData[y1:y2, x1:x2]
+            localSummedArray_roi = localSummedArray_roi + citiusData_roi / I0
+            count_roi,bins_roi = np.histogram(citiusData_roi,bins=np.arange(0,100,0.05),density=False)
+            localAllCounts_roi = localAllCounts_roi + count_roi
+            
             nTrainsLocal = nTrainsLocal + 1
 
         summedArray       = MPI_WORLD.reduce(localSummedArray      , op=MPI.SUM, root=0)
+        summedArray_roi   = MPI_WORLD.reduce(localSummedArray_roi  , op=MPI.SUM, root=0)
+        
         summedArrayNoNorm = MPI_WORLD.reduce(localSummedArrayNoNorm, op=MPI.SUM, root=0)
+        
         allCounts         = MPI_WORLD.reduce(localAllCounts        , op=MPI.SUM, root=0)
-
+        allCounts_roi     = MPI_WORLD.reduce(localAllCounts_roi    , op=MPI.SUM, root=0)
         
-        
-
         if (rank == 0):
+            #
+            # Saving arrays
             summedArray = summedArray / float(numberOfTrains)
             saveFileName = str(writeableDirectory) + "/citius_BL"+ str(beamLine) + "_r" + str(run) + ".npy" 
             np.save(saveFileName,summedArray)
-    
+
+            summedArray_roi = summedArray_roi / float(numberOfTrains)
+            saveFileName = str(writeableDirectory) + "/citius_roi_BL"+ str(beamLine) + "_r" + str(run) + ".npy" 
+            np.save(saveFileName,summedArray_roi)
+            #
+            # Saving non-normalised arrays
             saveFileName = str(writeableDirectory) + "/citiusNoNormilisation_BL"+ str(beamLine) + "_r" + str(run) + ".npy" 
             np.save(saveFileName,summedArrayNoNorm)
-    
+            #
+            # Saving histograms
             binCenters = []
             for i in range(np.shape(bins)[0]-1):
-                binCenters.append((bins[i]+bins[i+1]) * 0.5 )
+                binCenters.append((bins[i]+bins[i+1]) * 0.5)
             
             saveFileName = str(writeableDirectory) + "/citiusHistogram_BL"+ str(beamLine) + "_r" + str(run) + ".npy" 
             np.save(saveFileName,np.column_stack((binCenters, allCounts)))
+
+            binCenters_roi = []
+            for i in range(np.shape(bins_roi)[0]-1):
+                binCenters_roi.append((bins_roi[i]+bins_roi[i+1]) * 0.5 )
+            
+            saveFileName = str(writeableDirectory) + "/citiusHistogram_roi_BL"+ str(beamLine) + "_r" + str(run) + ".npy" 
+            np.save(saveFileName,np.column_stack((binCenters_roi, allCounts_roi)))
+            #
+            #
             t1 = time.time()
 
             totalTime = t1-t0
