@@ -22,3 +22,6 @@ rm output.txt error.txt
 
 # Run your application
 time mpiexec -n ${NCPUS} python3 citiusToNpy.py -rLow 255550 -rHigh 255587  -BL 2 -dir ./citiusData
+
+
+#ALL CITIUS data are in fiona's directory /home/sife/citiusData 
