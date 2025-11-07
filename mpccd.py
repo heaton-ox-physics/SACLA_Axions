@@ -469,5 +469,192 @@ class MPCCDProcessing():
         im2Dave = np.mean(im2Dall, 0)        
         
         return im2Dall, im2Dave
+
+
+class rocking_curve_analysis():
+    '''
+    Run rocking curve analysis for single run 
+    '''
+    def __init__(self, beamline, run):
+        self.run = run
+        self.bl = beamline
+        self.run_info = dbpy.read_runinfo(beamline, run)
+        self.taglist = dbpy.read_taglist_byrun(beamline, run)
+        self.high_tag = dbpy.read_hightagnumber(beamline, run)
+        self.start_tag = self.run_info['start_tagnumber']
+        self.end_tag = self.run_info['end_tagnumber']
+        self.shutter_mask = self.shutter()
+    def get_equip_data(self, equip_ID):
+        data = dbpy.read_syncdatalist_float(equip_ID, self.high_tag, self.taglist)
+        return data
+    def get_equip_data_pertag(self, equip_ID, res, tagnumber):
+        '''
+        Get equipment data per tag 
+        equipment --- can be anything, you can find the equipment ID 
+        '''
+        motor_pos = dbpy.read_syncdatalist_float(equip_ID, self.high_tag, self.taglist)
+        index = int((tagnumber - self.start_tag)/2)
+        print('index', index)
+        pos = motor_pos[index]
+        return {'equip_ID':equip_ID, 'motor_pulse': pos, 'motor_rotation': pos*res, 'resolution': res ,'tag': tagnumber}
+
+    def get_equip_data_perrun(self, equip_ID, res):
+        motor_pos = np.array(dbpy.read_syncdatalist_float(equip_ID, self.high_tag, self.taglist))
+        
+        return {'equip_ID':equip_ID, 'motor_pulse': motor_pos, 'motor_rotation': motor_pos*res, 'resolution': res, 'tag_list': self.taglist, 'run': self.run}
+    def read_det(self, detID):
+        
+        taglist = np.array(self.taglist)[self.shutter_mask]
+        numIm = len(self.taglist)
+        print('Run: {}\nNumber of images: {}\nDetector ID: {}'.format(self.run, numIm, detID))
+    
+        #stpy.StorageReader(detectorID, bl, run_numbers)
+        #run_numbers: tuple of run list
+        obj = stpy.StorageReader(detID, 3, (self.run,))
+        buff = stpy.StorageBuffer(obj)
+        obj.collect(buff, self.taglist[0])
+        im2D = buff.read_det_data(0)
+
+        im2Dall = np.zeros((numIm, len(im2D[:,0]), len(im2D[0,:])))
+        im2Dall[0] = im2D.copy()
+
+        i = 1
+        for tag in self.taglist[1:]:
+            if i % 100 == 0:
+                sys.stdout.write('\r%d' % i)
+                sys.stdout.flush()
+            obj.collect(buff, tag)
+            im2Dall[i] = buff.read_det_data(0).copy()
+            i += 1
+    
+        return im2Dall
+    def read_det_sbt(self,  detID, imDark):
+        '''
+        Background subtraction
+        '''
+        #Apply shutter mask to filter out the ones with shutter closed
+        
+        taglist = np.array(self.taglist)[self.shutter_mask]
+        numIm = len(taglist)
+        print('\nRun: {}\nNumber of images: {}\nDetector ID: {}'.format(self.run, numIm, detID))
+    
+        #stpy.StorageReader(detectorID, bl, run_numbers)
+        #run_numbers: tuple of run list
+        obj = stpy.StorageReader(detID, 3, (self.run,))
+        buff = stpy.StorageBuffer(obj)
+        obj.collect(buff, taglist[0])
+        im2D = buff.read_det_data(0)
+
+        im2Dall_sbt = np.zeros((numIm, len(im2D[:,0]), len(im2D[0,:])))
+        im2Dall_sbt[0] = im2D - imDark
+
+        i = 1
+        for tag in taglist[1:]:
+            if i % 100 == 0:
+                sys.stdout.write('\r%d' % i)
+                sys.stdout.flush()
+            obj.collect(buff, tag)
+            im2Dall_sbt[i] = buff.read_det_data(0) - imDark
+            i += 1
+
+        return im2Dall_sbt
+        
+    def shutter(self):
+        '''
+        Returns shutter mask
+        '1.0' --- True
+        '0.0' --- False
+        '''
+        shutter = np.array(dbpy.read_syncdatalist_float('xfel_bl_3_shutter_1_open_valid/status', self.high_tag, self.taglist))
+        shutter_mask = shutter==1.0
+        shutter_mask = np.array(shutter, dtype=bool)
+
+        return shutter_mask
+
+    def rocking_curve(self, equip_ID, res, imavg):
+        '''
+        Returns raw motor position and raw intensity 
+        '''
+        # imavg should already be shutter-masked and cropped for ROI
+        # res is the resolution of this particular motor (equip_ID)
+        motor_pos = self.get_equip_data_perrun(equip_ID, res)['motor_rotation'][self.shutter_mask]
+        intensity = imavg
+        plt.figure()
+        plt.plot(motor_pos, intensity, '.')
+        plt.grid()
+        plt.xlabel(f'{equip_ID} / degree')
+        plt.ylabel('average intensity (ROI)')
+        plt.show()
+
+#########################################################
+    #############################################
+    
+    def rocking_curve_avgd(self, equip_ID, res, imavg):
+        '''
+        Returns unique motor position & Average intensity per unique motor position
+        '''
+        # imavg should already be shutter-masked and cropped for ROI
+        # res is the resolution of this particular motor (equip_ID)
+        motor_pos = self.get_equip_data_perrun(equip_ID, res)['motor_rotation'][self.shutter_mask]
+
+        df = pd.DataFrame({'motor_pos': motor_pos, 'imavg': imavg})
+        df_avg = df.groupby('motor_pos', as_index=False)['imavg'].mean()
+
+        motor_pos_unique = df_avg['motor_pos'].to_numpy()
+        imavg_mean = df_avg['imavg'].to_numpy()        
+        intensity = imavg_mean
+
+        return motor_pos_unique, intensity
+        #plt.figure()
+        #plt.plot(motor_pos_unique, intensity, '.')
+        #plt.grid()
+        #plt.xlabel(f'{equip_ID} / degree')
+        #plt.ylabel('average intensity (ROI)')
+        #plt.show()
+        
+#########################################################
+    #############################################
+    
+    def rocking_curve_fit(self, equip_ID, res, imavg):
+        '''
+        Returns morot position & fitted intensity
+        '''
+        # imavg should already be shutter-masked and cropped for ROI
+        # res is the resolution of this particular motor (equip_ID)
+        motor_pos = self.get_equip_data_perrun(equip_ID, res)['motor_rotation'][self.shutter_mask]
+
+        df = pd.DataFrame({'motor_pos': motor_pos, 'imavg': imavg})
+        df_avg = df.groupby('motor_pos', as_index=False)['imavg'].mean()
+
+        motor_pos_unique = df_avg['motor_pos'].to_numpy()
+        imavg_mean = df_avg['imavg'].to_numpy()        
+        intensity = imavg_mean
+
+        def gaussian(x, A, mu, sigma, offset):
+            return A * np.exp(-((x - mu) ** 2) / (2 * sigma ** 2)) + offset
+
+        A0 = np.max(imavg_mean) - np.min(imavg_mean)
+        mu0 = motor_pos_unique[np.argmax(imavg_mean)]
+        sigma0 = (motor_pos_unique.max() - motor_pos_unique.min()) / 10
+        offset0 = np.min(imavg_mean)
+
+        p0 = [A0, mu0, sigma0, offset0]
+
+        popt, pcov = curve_fit(gaussian, motor_pos_unique, imavg_mean, p0=p0)
+
+        A, mu, sigma, offset = popt
+        print(f"A = {A:.3e}, mu = {mu:.4f}, sigma = {sigma:.4f}, offset = {offset:.3e}")
+
+        x_fit = np.linspace(motor_pos_unique.min(), motor_pos_unique.max(), 500)
+        y_fit = gaussian(x_fit, *popt)
+
+        return x_fit, y_fit
+        #plt.figure()
+        #plt.plot(x_fit, y_fit, '.')
+        #plt.grid()
+        #plt.xlabel(f'{equip_ID} / degree')
+        #plt.ylabel('average intensity (ROI)')
+        #plt.show()
+
         
         
