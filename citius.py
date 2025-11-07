@@ -25,18 +25,176 @@ def getPulseEnegyInJ(beamLine,run,trainID):
     ### Replace with proper function
     return 1
 
+class CITIUSReader():
+    def __init__(self, read_path, bl=3):
+        self.bl = bl
+        self.read_path = read_path
+
+    def read_runlist(self, run_list):
+        #
+        img_list, imgROI_list, bins_list, counts_list, binsROI_list, countsROI_list = [[] for i in range(6)]
+        #
+        for run in run_list:
+            fileName_img = os.path.join(self.read_path, f'citius_BL{self.bl}_r{run}.npy')
+            img = np.load(fileName_img)
+            img_list.append(img)
+
+            # fileName_imgROI = os.path.join(self.read_path, f'citius_roi_BL{self.bl}_r{run}.npy')
+            # imgROI = np.load(fileName_imgROI)
+            # imgROI_list.append(imgROI)
+
+            fileName_hist = os.path.join(self.read_path, f"citiusHistogram_BL{self.bl}_r{run}.npy")
+            histogram = np.load(fileName_hist)
+            bins = []
+            counts = []
+            for i in range(np.shape(histogram)[0]):
+                bins.append(histogram[i][0])
+                counts.append(histogram[i][1])
+            bins_list.append(bins)
+            counts_list.append(counts)
+
+            # fileName_histROI = os.path.join(self.read_path, f"citiusHistogram_roi_BL{self.bl}_r{run}.npy")
+            # histogram_roi = np.load(fileName_histROI)
+            # binsROI = []
+            # countsROI = []
+            
+            # for i in range(np.shape(histogram_roi)[0]):
+            #     binsROI.append(histogram_roi[i][0])
+            #     countsROI.append(histogram_roi[i][1])
+            # binsROI_list.append(binsROI)
+            # countsROI_list.append(countsROI)
+            
+        return img_list, imgROI_list, bins_list, counts_list, binsROI_list, countsROI_list
+
+    def find_and_fit_peaks(self, counts,
+                           bin_centers = None,
+                           smooth_sigma=2.0,
+                           peak_prominence_frac=0.01,
+                           n_peaks_needed=4,
+                           plot=True):
+        """
+        all_values : 1D numpy array of pixel ADU values (all shots concatenated)
+        nbins : histogram bins
+        smooth_sigma : gaussian smoothing sigma (bins)
+        peak_prominence_frac : peak prominence relative to max(hist_smoothed)
+        n_peaks_needed : number of peaks to select (default: 4 => 0,1,2,3 photon)
+        Returns dict with peak_positions (ADU), slope (ADU per photon), intercept, R2, fit_resids
+        """
+        counts = np.asarray(counts, dtype=float)
+        bin_centers = np.asarray(bin_centers, dtype=float)
+        if counts.shape != bin_centers.shape:
+            raise ValueError("counts and bin_centers must have the same shape")
+    
+        # Smooth histogram (use same name hist_sm to be familiar)
+        hist = counts.copy()
+        hist_sm = gaussian_filter1d(hist, sigma=smooth_sigma)
+    
+        # 3) Find peaks
+        prominence = max(1, peak_prominence_frac * np.max(hist_sm))
+        peaks_idx, properties = find_peaks(hist_sm, prominence=prominence)
+        peak_centers = bin_centers[peaks_idx]
+        peak_heights = hist_sm[peaks_idx]
+        peak_prominences = properties.get("prominences", np.zeros_like(peaks_idx))
+    
+        # If no peaks found, try lowering prominence a bit
+        if len(peaks_idx) < n_peaks_needed:
+            prominence2 = max(1, 0.5 * peak_prominence_frac * np.max(hist_sm))
+            peaks_idx2, properties2 = find_peaks(hist_sm, prominence=prominence2)
+            if len(peaks_idx2) > len(peaks_idx):
+                peaks_idx, properties = peaks_idx2, properties2
+                peak_centers = bin_centers[peaks_idx]
+                peak_heights = hist_sm[peaks_idx]
+                peak_prominences = properties.get("prominences", np.zeros_like(peaks_idx))
+    
+        if len(peaks_idx) < n_peaks_needed:
+            print(f"[warning] only found {len(peaks_idx)} peaks (need {n_peaks_needed}).")
+            print("Try: increasing `nbins`, lowering `peak_prominence_frac`, or narrowing ROI.")
+            # still continue and attempt fit with what we have
+    
+        # 4) sort peaks by ADU (ascending) and pick first n_peaks_needed
+        order = np.argsort(peak_centers)
+        peak_centers_sorted = peak_centers[order]
+        peak_heights_sorted = peak_heights[order]
+        peak_prom_sorted = peak_prominences[order]
+    
+        selected = peak_centers_sorted[:n_peaks_needed]
+        selected_heights = peak_heights_sorted[:n_peaks_needed]
+        # photon numbers: 0,1,2,... for the selected peaks
+        photon_numbers = np.arange(len(selected))
+    
+        # 5) Linear fit: ADU = slope * photon + intercept
+        if len(selected) >= 2:
+            coeffs = np.polyfit(photon_numbers, selected, 1)
+            slope, intercept = coeffs[0], coeffs[1]
+            # compute R^2
+            fitted = slope * photon_numbers + intercept
+            ss_res = np.sum((selected - fitted)**2)
+            ss_tot = np.sum((selected - np.mean(selected))**2)
+            r2 = 1 - ss_res/ss_tot if ss_tot != 0 else np.nan
+        else:
+            slope = intercept = r2 = np.nan
+            fitted = np.array([])
+    
+        results = {
+            "bin_centers": bin_centers,
+            "hist": hist,
+            "hist_smoothed": hist_sm,
+            "peaks_idx": peaks_idx,
+            "peak_centers_all": peak_centers,
+            "selected_peak_centers": selected,
+            "selected_peak_heights": selected_heights,
+            "slope_adu_per_photon": slope,
+            "intercept_adu": intercept,
+            "r2": r2,
+            "photon_numbers_used": photon_numbers,
+            "fitted_values": fitted
+        }
+
+        self.slope = slope
+        self.intercept = intercept
+        self.calibration_calculated = True
+    
+        if plot:
+            plt.figure(figsize=(9,5))
+            plt.plot(bin_centers, hist, alpha=0.25, label="hist")
+            plt.plot(bin_centers, hist_sm, lw=1.5, label=f"smoothed (σ={smooth_sigma})")
+            # mark all peaks found
+            plt.scatter(peak_centers, hist_sm[peaks_idx], color='C1', marker='x', label='detected peaks')
+            # mark selected peaks
+            plt.vlines(selected, ymin=0, ymax=np.max(hist_sm)*0.9, colors='C3', linestyles='--',
+                       label=f'selected first {len(selected)} peaks')
+            # annotate selected ADU values
+            for i,ad in enumerate(selected):
+                plt.text(ad, np.max(hist_sm)*0.92, f"{i}:{ad:.1f}", rotation=90, va='bottom', ha='center', color='C3')
+            # plot fit line (ADU vs photon) as vertical ticks: show expected ADU positions for integer photons
+            if not np.isnan(slope):
+                photon_grid = np.arange(0, max(6, n_peaks_needed+3))
+                adu_line = slope * photon_grid + intercept
+                # plot ticks at these ADU positions on top of plot
+                plt.vlines(adu_line, ymin=0, ymax=np.max(hist_sm)*0.6, colors='k', linestyles=':', alpha=0.6,
+                           label=f'fit: {slope:.2f} ADU/photon, intercept {intercept:.1f}')
+                for p,a in zip(photon_grid, adu_line):
+                    plt.text(a, np.max(hist_sm)*0.62, str(p), ha='center', va='bottom', fontsize=8, color='k')
+    
+            plt.xlabel("ADU (intensity)")
+            plt.ylabel("Counts")
+            plt.title("ROI histogram — detected peaks and linear fit")
+            plt.legend(loc='upper right')
+            plt.yscale('log')
+            plt.tight_layout()
+            plt.show()
+    
+            print("Selected peak ADU positions (first peaks):", np.round(selected,2))
+            print(f"Slope (ADU / photon): {slope:.4f}")
+            print(f"Intercept (ADU): {intercept:.2f}")
+            print(f"R^2 of linear fit (selected peaks): {r2:.4f}")
+    
+        return results
+
+        
 class CITIUSProcessing():
     def __init__(self, base_path, detectorID, bl=3):
-        """
-        Initialize calibration class.
-        
-        Parameters
-        ----------
-        base_path : str
-            Path to the main analysis folder containing subdirs for spectrometers.
-        detector_name : str
-            Identifier for spectrometer (used in subfolder names).
-        """
+
         self.bl = bl
         self.base_path = base_path
         self.detectorID = detectorID
@@ -74,12 +232,12 @@ class CITIUSProcessing():
     
             summedArray = np.zeros(np.shape(CITIUS_EMPTY_MASK))
             summedArrayNoNorm = np.zeros(np.shape(CITIUS_EMPTY_MASK))
-            count,bins = np.histogram(CITIUS_EMPTY_MASK,bins=np.arange(0,100,0.05),density=False)
+            count,bins = np.histogram(CITIUS_EMPTY_MASK,bins=np.arange(0,1000,0.05),density=False)
             allCounts = np.zeros(np.shape(count))
     
             localSummedArray       = np.zeros(np.shape(CITIUS_EMPTY_MASK))
             localSummedArrayNoNorm = np.zeros(np.shape(CITIUS_EMPTY_MASK))
-            count,bins = np.histogram(CITIUS_EMPTY_MASK,bins=np.arange(0,100,0.05),density=False)
+            count,bins = np.histogram(CITIUS_EMPTY_MASK,bins=np.arange(0,1000,0.05),density=False)
             localAllCounts = np.zeros(np.shape(count))
     
             nTrainsLocal = 0
@@ -103,7 +261,7 @@ class CITIUSProcessing():
     
                 localSummedArray = localSummedArray + citiusData / I0
                 localSummedArrayNoNorm = localSummedArrayNoNorm + citiusData
-                count,bins = np.histogram(citiusData,bins=np.arange(0,100,0.05),density=False)
+                count,bins = np.histogram(citiusData,bins=np.arange(0,1000,0.05),density=False)
                 localAllCounts = localAllCounts + count
                 nTrainsLocal = nTrainsLocal + 1
 
